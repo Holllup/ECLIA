@@ -17,6 +17,7 @@ import {
   type Message
 } from "discord.js";
 
+<<<<<<< Updated upstream
 type DiscordOrigin = {
   kind: "discord";
   guildId?: string;
@@ -26,6 +27,31 @@ type DiscordOrigin = {
   threadId?: string;
   threadName?: string;
 };
+=======
+import { env, hasEnv, boolEnv, normalizeIdList, json, readJson, makeAdapterLogger, bootstrapAutoProxy } from "@eclia/gateway-client/utils";
+import {
+  guessGatewayUrl,
+  getGatewayToken,
+  resetGatewaySession,
+  coerceStreamMode,
+  runGatewayChat,
+  fetchArtifactBytes,
+  installProcessErrorHandlers,
+  parseToolAccessMode
+} from "@eclia/gateway-client";
+import {
+  type SendRequest,
+  sessionIdForDiscord,
+  originFromInteraction,
+  originFromMessage,
+  formatDiscordOutboundText,
+  sendTextOrFile,
+  createInteractionSendFn,
+  createMessageSendFn,
+  extractRefToRepoRelPath,
+  makeOnRecordHandler
+} from "./discord-format.js";
+>>>>>>> Stashed changes
 
 type SendRequest = {
   origin: DiscordOrigin;
@@ -444,6 +470,8 @@ async function fetchArtifactBytes(gatewayUrl: string, relPath: string): Promise<
 }
 
 async function main() {
+  bootstrapAutoProxy((message) => log.info(message));
+
   const { config } = loadEcliaConfig(process.cwd());
   const discordCfg = config.adapters.discord;
 

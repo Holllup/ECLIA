@@ -1,0 +1,35 @@
+{
+  "name": "@eclia/gateway-client",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./utils": {
+      "types": "./dist/utils.d.ts",
+      "default": "./dist/utils.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node ../../scripts/clean-dist.mjs && tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json -w --preserveWatchOutput",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@eclia/config": "workspace:*",
+    "@eclia/tool-protocol": "workspace:*",
+    "undici": "^6.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.31",
+    "typescript": "^5.9.3"
+  }
+}

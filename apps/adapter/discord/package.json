@@ -4,7 +4,13 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+<<<<<<< Updated upstream
     "dev": "tsx server/index.ts",
+=======
+    "predev": "pnpm -w run build:shared",
+    "dev": "node --require ./server/proxy-preload.cjs --require tsx/cjs -e \"require('./server/index.ts')\"",
+    "pretypecheck": "pnpm -w run build:shared",
+>>>>>>> Stashed changes
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:watch": "tsc -p tsconfig.json --noEmit -w --preserveWatchOutput"
   },
@@ -15,6 +21,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.31",
+    "https-proxy-agent": "^7.0.6",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"
   }

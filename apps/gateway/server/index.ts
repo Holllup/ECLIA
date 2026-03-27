@@ -10,7 +10,11 @@ import { ToolApprovalHub } from "./tools/approvalHub.js";
 import { EXEC_TOOL_NAME, SEND_TOOL_NAME } from "./tools/toolSchemas.js";
 import { SEND_TOOL_SCHEMA } from "./tools/sendTool.js";
 import { McpStdioClient, type McpToolDef } from "./mcp/stdioClient.js";
+<<<<<<< Updated upstream
 import { json } from "./httpUtils.js";
+=======
+import { bootstrapAutoProxy, json } from "@eclia/gateway-client/utils";
+>>>>>>> Stashed changes
 
 import { handleArtifacts } from "./routes/artifacts.js";
 import { handleChat } from "./routes/chat.js";
@@ -29,6 +33,8 @@ const ARTIFACT_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const artifactSessions = new Map<string, number>(); // sessionId -> expiresAt
 
 async function main() {
+  bootstrapAutoProxy((message) => console.log(`[gateway] ${message}`));
+
   const { config, rootDir } = loadEcliaConfig(process.cwd());
   const port = config.api.port;
 
