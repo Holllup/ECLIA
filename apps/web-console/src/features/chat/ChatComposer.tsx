@@ -158,7 +158,9 @@ export function ChatComposer({ onOpenMenu }: { onOpenMenu: () => void }) {
   }, [sendText, text]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // Fix IME input bug: don't send message when input method is still composing
+    // Only send when isComposing is false (user has confirmed the input)
+    if (e.key === "Enter" && !e.shiftKey && !(e.nativeEvent as KeyboardEvent).isComposing) {
       e.preventDefault();
       void send();
     }
