@@ -1,16 +1,16 @@
 import http from "node:http";
 import crypto from "node:crypto";
+import { createRequire } from "node:module";
 
-import { loadEcliaConfig } from "@eclia/config";
 import {
-  Client,
-  Events,
-  GatewayIntentBits,
-  Partials,
-  REST,
-  Routes,
-  MessageFlags
-} from "discord.js";
+  loadEcliaConfig,
+  openaiCompatProfileRouteKey,
+  anthropicProfileRouteKey,
+  codexOAuthProfileRouteKey,
+  type EcliaConfig
+} from "@eclia/config";
+import { HttpsProxyAgent } from "https-proxy-agent";
+import { ProxyAgent, type Dispatcher } from "undici";
 
 import { env, hasEnv, boolEnv, normalizeIdList, json, readJson, makeAdapterLogger } from "@eclia/gateway-client/utils";
 import {
@@ -37,6 +37,15 @@ import {
 } from "./discord-format.js";
 
 const log = makeAdapterLogger("discord");
+const require = createRequire(import.meta.url);
+const DISCORD_WS_PROXY_PATCH = Symbol.for("eclia.discord.wsProxyPatch");
+
+type DiscordModule = typeof import("discord.js");
+type DiscordProxyConfig = {
+  url: string;
+  source: string;
+  displayUrl: string;
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -71,13 +80,139 @@ function requirePrefixFromEnv(): boolean {
   return boolEnv("ECLIA_DISCORD_ALLOW_MESSAGE_PREFIX");
 }
 
+function redactProxyUrl(proxyUrl: string): string {
+  try {
+    const u = new URL(proxyUrl);
+    if (u.username) u.username = "***";
+    if (u.password) u.password = "***";
+    return u.toString();
+  } catch {
+    return proxyUrl;
+  }
+}
+
+function parseDiscordProxyCandidate(
+  rawValue: string,
+  source: string,
+  opts?: { strict?: boolean; warnOnSkip?: boolean }
+): DiscordProxyConfig | null {
+  const raw = String(rawValue ?? "").trim();
+  if (!raw) return null;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    if (opts?.strict) {
+      throw new Error(`Invalid Discord proxy URL from ${source}. Use an http:// or https:// proxy URL.`);
+    }
+    if (opts?.warnOnSkip) log.warn(`ignoring ${source}: invalid proxy URL`);
+    return null;
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    if (opts?.strict) {
+      throw new Error(`Discord proxy URL from ${source} must use http:// or https://.`);
+    }
+    if (opts?.warnOnSkip) log.warn(`ignoring ${source}: only http:// and https:// proxies are supported`);
+    return null;
+  }
+
+  return {
+    url: parsed.toString(),
+    source,
+    displayUrl: redactProxyUrl(parsed.toString())
+  };
+}
+
+function resolveDiscordProxy(rawDiscordCfg: { proxy_url?: string }): DiscordProxyConfig | null {
+  return (
+    parseDiscordProxyCandidate(env("ECLIA_DISCORD_PROXY_URL"), "ECLIA_DISCORD_PROXY_URL", { strict: true }) ??
+    parseDiscordProxyCandidate(String(rawDiscordCfg.proxy_url ?? ""), "adapters.discord.proxy_url", { strict: true }) ??
+    parseDiscordProxyCandidate(env("HTTPS_PROXY"), "HTTPS_PROXY", { warnOnSkip: true }) ??
+    parseDiscordProxyCandidate(env("HTTP_PROXY"), "HTTP_PROXY", { warnOnSkip: true }) ??
+    parseDiscordProxyCandidate(env("ALL_PROXY"), "ALL_PROXY", { warnOnSkip: true })
+  );
+}
+
+function installDiscordWsProxyShim(proxy: DiscordProxyConfig): void {
+  const wsModule = require("ws") as any;
+  if (!wsModule || typeof wsModule.WebSocket !== "function") {
+    throw new Error("Failed to install Discord WebSocket proxy shim: ws module is unavailable.");
+  }
+
+  const existing = wsModule[DISCORD_WS_PROXY_PATCH] as { url: string } | undefined;
+  if (existing?.url === proxy.url) return;
+  if (existing && existing.url !== proxy.url) {
+    throw new Error("Discord WebSocket proxy shim is already installed with a different proxy URL.");
+  }
+
+  const OriginalWebSocket = wsModule.WebSocket;
+  const proxyAgent = new HttpsProxyAgent(proxy.url);
+
+  const ProxiedWebSocket = function (
+    this: unknown,
+    address: unknown,
+    protocols?: unknown,
+    options?: Record<string, unknown>
+  ) {
+    let nextProtocols = protocols;
+    let nextOptions = options;
+
+    if (protocols && typeof protocols === "object" && !Array.isArray(protocols)) {
+      nextOptions = protocols as Record<string, unknown>;
+      nextProtocols = undefined;
+    }
+
+    return new OriginalWebSocket(address, nextProtocols as any, {
+      ...(nextOptions ?? {}),
+      agent: (nextOptions as any)?.agent ?? proxyAgent
+    });
+  } as any;
+
+  Object.setPrototypeOf(ProxiedWebSocket, OriginalWebSocket);
+  ProxiedWebSocket.prototype = OriginalWebSocket.prototype;
+  wsModule.WebSocket = ProxiedWebSocket;
+  wsModule[DISCORD_WS_PROXY_PATCH] = { url: proxy.url };
+}
+
+function defaultDiscordRouteModel(config: EcliaConfig): string {
+  const provider = config.inference.provider;
+
+  if (provider === "anthropic") {
+    const profiles = config.inference.anthropic?.profiles ?? [];
+    const profile =
+      profiles.find((p) => typeof p.api_key === "string" && p.api_key.trim()) ??
+      profiles[0];
+    return anthropicProfileRouteKey(String(profile?.id ?? "default"));
+  }
+
+  if (provider === "codex_oauth") {
+    const profiles = config.inference.codex_oauth?.profiles ?? [];
+    const profile = profiles[0];
+    return codexOAuthProfileRouteKey(String(profile?.id ?? "default"));
+  }
+
+  const profiles = config.inference.openai_compat?.profiles ?? [];
+  const profile =
+    profiles.find((p) => typeof p.api_key === "string" && p.api_key.trim()) ??
+    profiles[0];
+  return openaiCompatProfileRouteKey(String(profile?.id ?? "default"));
+}
+
 type SlashRegistrationOutcome =
   | { mode: "global" }
   | { mode: "guild"; guildIds: string[] }
   | { mode: "none" };
 
-async function registerSlashCommands(args: { token: string; appId: string; guildIds: string[]; forceGlobalCommands: boolean }): Promise<SlashRegistrationOutcome> {
-  const rest = new REST({ version: "10" }).setToken(args.token);
+async function registerSlashCommands(
+  discord: DiscordModule,
+  args: { token: string; appId: string; guildIds: string[]; forceGlobalCommands: boolean; restAgent: Dispatcher | null }
+): Promise<SlashRegistrationOutcome> {
+  const rest = new discord.REST({
+    version: "10",
+    ...(args.restAgent ? { agent: args.restAgent } : {})
+  }).setToken(args.token);
 
   const commands = [
     {
@@ -107,20 +242,20 @@ async function registerSlashCommands(args: { token: string; appId: string; guild
   const guildIds = normalizeIdList(args.guildIds);
 
   if (args.forceGlobalCommands) {
-    await rest.put(Routes.applicationCommands(args.appId), { body: commands });
+    await rest.put(discord.Routes.applicationCommands(args.appId), { body: commands });
     return { mode: "global" };
   }
 
   if (!guildIds.length) {
     // Explicitly clear global commands so force-global=off is deterministic.
-    await rest.put(Routes.applicationCommands(args.appId), { body: [] });
+    await rest.put(discord.Routes.applicationCommands(args.appId), { body: [] });
     return { mode: "none" };
   }
 
   for (const gid of guildIds) {
-    await rest.put(Routes.applicationGuildCommands(args.appId, gid), { body: commands });
+    await rest.put(discord.Routes.applicationGuildCommands(args.appId, gid), { body: commands });
   }
-  await rest.put(Routes.applicationCommands(args.appId), { body: [] });
+  await rest.put(discord.Routes.applicationCommands(args.appId), { body: [] });
   return { mode: "guild", guildIds };
 }
 
@@ -178,14 +313,29 @@ async function main() {
   const requirePrefix = requirePrefixFromEnv();
   const prefix = env("ECLIA_DISCORD_PREFIX", "!eclia");
   const toolAccessMode = parseToolAccessMode(env("ECLIA_DISCORD_TOOL_ACCESS_MODE", "full"));
+  const proxy = resolveDiscordProxy(discordCfg);
+
+  if (proxy) {
+    installDiscordWsProxyShim(proxy);
+  }
+
+  const discord = (await import("discord.js")) as DiscordModule;
+  const restAgent = proxy ? new ProxyAgent(proxy.url) : null;
+  const routeModel = defaultDiscordRouteModel(config);
 
   log.info(`gateway: ${gatewayUrl}`);
+  if (proxy) {
+    log.info(`proxy: ${proxy.displayUrl} (${proxy.source})`);
+  } else {
+    log.info("proxy: disabled");
+  }
+  log.info(`model: ${routeModel}`);
   if (!userWhitelist.length) {
     log.warn("user whitelist is empty; slash/plain-message inputs will be ignored.");
   }
 
   log.info("Registering slash commands...");
-  const registration = await registerSlashCommands({ token, appId, guildIds: guildWhitelist, forceGlobalCommands });
+  const registration = await registerSlashCommands(discord, { token, appId, guildIds: guildWhitelist, forceGlobalCommands, restAgent });
   if (registration.mode === "global") {
     log.info("Slash commands registered (global)");
   } else if (registration.mode === "guild") {
@@ -194,27 +344,33 @@ async function main() {
     log.warn("Force-global is OFF but guild whitelist is empty. Slash commands are not registered anywhere.");
   }
 
-  const intents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.DirectMessages, GatewayIntentBits.MessageContent];
+  const intents = [
+    discord.GatewayIntentBits.Guilds,
+    discord.GatewayIntentBits.GuildMessages,
+    discord.GatewayIntentBits.DirectMessages,
+    discord.GatewayIntentBits.MessageContent
+  ];
 
-  const client = new Client({
+  const client = new discord.Client({
     intents,
-    partials: [Partials.Channel]
+    partials: [discord.Partials.Channel],
+    ...(restAgent ? { rest: { agent: restAgent } } : {})
   });
 
-  client.once(Events.ClientReady, (c) => {
+  client.once(discord.Events.ClientReady, (c) => {
     log.info(`Logged in as ${c.user.tag}`);
   });
 
   // ----- Interaction handler (slash commands) -----
 
-  client.on(Events.InteractionCreate, async (interaction) => {
+  client.on(discord.Events.InteractionCreate, async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
     const userId = String(interaction.user?.id ?? "").trim();
     if (!userId || !userWhitelistSet.has(userId)) {
       try {
         await interaction.reply({
           content: "You are not in the Discord user whitelist.",
-          flags: MessageFlags.Ephemeral
+          flags: discord.MessageFlags.Ephemeral
         });
       } catch {
         // ignore permission/race errors
@@ -229,7 +385,7 @@ async function main() {
         try {
           await interaction.reply({
             content: "This guild is not in the Discord guild whitelist.",
-            flags: MessageFlags.Ephemeral
+            flags: discord.MessageFlags.Ephemeral
           });
         } catch {
           // ignore permission/race errors
@@ -243,7 +399,7 @@ async function main() {
       const origin = originFromInteraction(interaction);
       const sessionId = sessionIdForDiscord(origin);
       try {
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        await interaction.deferReply({ flags: discord.MessageFlags.Ephemeral });
         await resetGatewaySession(gatewayUrl, sessionId);
         await interaction.editReply("Cleared session for this channel.");
       } catch (e: any) {
@@ -274,6 +430,7 @@ async function main() {
           gatewayUrl,
           sessionId,
           origin,
+          model: routeModel,
           streamMode: useStreamMode,
           userText: prompt,
           toolAccessMode,
@@ -286,6 +443,7 @@ async function main() {
         gatewayUrl,
         sessionId,
         origin,
+        model: routeModel,
         streamMode: useStreamMode,
         userText: prompt,
         toolAccessMode
@@ -315,7 +473,7 @@ async function main() {
 
   // ----- Message handler (plain text by default; optional required prefix) -----
 
-  client.on(Events.MessageCreate, async (message) => {
+  client.on(discord.Events.MessageCreate, async (message) => {
     if (!message.content) return;
     if (message.author?.bot) return;
     const userId = String(message.author?.id ?? "").trim();
@@ -347,6 +505,7 @@ async function main() {
           gatewayUrl,
           sessionId,
           origin,
+          model: routeModel,
           streamMode,
           userText: prompt,
           toolAccessMode,
@@ -361,6 +520,7 @@ async function main() {
         gatewayUrl,
         sessionId,
         origin,
+        model: routeModel,
         streamMode,
         userText: prompt,
         toolAccessMode

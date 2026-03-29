@@ -324,6 +324,10 @@ export function coerceConfig(raw: Record<string, any>): EcliaConfig {
             ? discordRaw.app_id.trim()
             : undefined,
         bot_token: typeof discordRaw.bot_token === "string" ? discordRaw.bot_token : undefined,
+        proxy_url:
+          typeof discordRaw.proxy_url === "string" && discordRaw.proxy_url.trim().length
+            ? discordRaw.proxy_url.trim()
+            : undefined,
         guild_ids: coerceStringArray((discordRaw as any).guild_ids, base.adapters.discord.guild_ids ?? []),
         user_whitelist: coerceStringArray((discordRaw as any).user_whitelist, (base.adapters.discord as any).user_whitelist ?? []),
         force_global_commands: coerceBool(

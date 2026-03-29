@@ -15,7 +15,9 @@
     "@eclia/config": "workspace:*",
     "@eclia/gateway-client": "workspace:*",
     "@eclia/tool-protocol": "workspace:*",
-    "discord.js": "^14.25.1"
+    "discord.js": "^14.25.1",
+    "https-proxy-agent": "^8.0.0",
+    "undici": "^6.21.3"
   },
   "devDependencies": {
     "@types/node": "^20.19.31",

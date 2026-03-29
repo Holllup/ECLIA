@@ -13,6 +13,7 @@ Required (env or local TOML):
 
 - `DISCORD_BOT_TOKEN` **or** `adapters.discord.bot_token` in `eclia.config.local.toml`
 - `DISCORD_APP_ID` **or** `adapters.discord.app_id` in `eclia.config.local.toml`
+- `ECLIA_DISCORD_PROXY_URL` **or** `adapters.discord.proxy_url` when the bot must reach Discord through an explicit HTTP(S) proxy
 
 Recommended (for fast command iteration):
 
@@ -26,6 +27,7 @@ Recommended (for fast command iteration):
 
   ```toml
   [adapters.discord]
+  proxy_url = "http://127.0.0.1:7890"
   guild_ids = ["123456789012345678", "987654321098765432"]
   user_whitelist = ["111111111111111111", "222222222222222222"]
   force_global_commands = false
@@ -44,6 +46,9 @@ Gateway connection:
 
 Optional:
 
+- `ECLIA_DISCORD_PROXY_URL` – adapter-specific HTTP(S) proxy for Discord REST + Gateway WebSocket traffic.
+  - Preferred when Discord works in apps/browser but the Node bot process cannot connect directly.
+  - Proxy precedence: `ECLIA_DISCORD_PROXY_URL` -> `adapters.discord.proxy_url` -> `HTTPS_PROXY` -> `HTTP_PROXY` -> `ALL_PROXY` (HTTP/HTTPS only).
 - `ECLIA_DISCORD_STREAM=1` – periodically edits the reply while the gateway streams.
 - `ECLIA_DISCORD_DEFAULT_STREAM_MODE=full|final` – default stream mode for the `/eclia` slash command when `verbose` is omitted.
   - Prefer configuring `adapters.discord.default_stream_mode` in `eclia.config.local.toml` (Settings -> Adapters -> Advanced).
@@ -63,4 +68,10 @@ Outbound endpoint:
 
 ```bash
 pnpm -C apps/adapter/discord dev
+```
+
+If you use a local proxy for Discord, a typical launch looks like:
+
+```bash
+ECLIA_DISCORD_PROXY_URL=http://127.0.0.1:7890 pnpm -C apps/adapter/discord dev
 ```

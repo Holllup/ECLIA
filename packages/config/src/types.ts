@@ -135,6 +135,7 @@ export type EcliaConfig = {
       enabled: boolean;
       app_id?: string; // non-secret (application id / client id)
       bot_token?: string; // secret (prefer local overrides)
+      proxy_url?: string; // optional HTTP(S) proxy used for Discord REST + Gateway WebSocket
       guild_ids?: string[]; // guild whitelist used by registration/runtime filtering
       user_whitelist?: string[]; // allowed Discord user ids for slash/plain-message handling
       force_global_commands?: boolean; // register only global commands (and filter guild replies by whitelist)
@@ -388,6 +389,7 @@ export const DEFAULT_ECLIA_CONFIG: EcliaConfig = {
   adapters: {
     discord: {
       enabled: false,
+      proxy_url: undefined,
       guild_ids: [],
       user_whitelist: [],
       force_global_commands: false,
